@@ -1,0 +1,24 @@
+gateways:
+  snowflake:
+    connection:
+      type: snowflake
+      account: YOUR_ACCOUNT
+      user: YOUR_USER
+      password: YOUR_PASSWORD
+      warehouse: YOUR_WAREHOUSE
+      database: YOUR_DATABASE
+      schema: YOUR_SCHEMA
+
+default_gateway: snowflake
+
+model_defaults:
+  dialect: snowflake
+
+project: mantra_recitation
+
+# Environment configuration
+environments:
+  prod:
+    gateway: snowflake
+  dev:
+    gateway: snowflake

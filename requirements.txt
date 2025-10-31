@@ -1,0 +1,29 @@
+# Dagster
+dagster>=1.5.0
+dagster-webserver>=1.5.0
+dagster-snowflake>=0.21.0
+dagster-snowflake-pandas>=0.21.0
+
+# SQLMesh
+sqlmesh>=0.94.0
+sqlmesh[snowflake]
+
+# Snowflake
+snowflake-connector-python>=3.4.0
+snowflake-sqlalchemy>=1.5.0
+
+# Data Processing
+pandas>=2.0.0
+pyarrow>=14.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+requests>=2.31.0
+
+# Development
+pytest>=7.4.0
+pytest-cov>=4.1.0
+black>=23.0.0
+ruff>=0.1.0
+mypy>=1.7.0
