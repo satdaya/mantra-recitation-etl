@@ -8,11 +8,20 @@ gateways:
       warehouse: YOUR_WAREHOUSE
       database: YOUR_DATABASE
       schema: YOUR_SCHEMA
+    # Iceberg-specific configuration
+    engine_adapter_config:
+      external_volume: YOUR_EXTERNAL_VOLUME  # Snowflake external volume for Iceberg
+      catalog: YOUR_CATALOG  # Iceberg catalog name
 
 default_gateway: snowflake
 
 model_defaults:
   dialect: snowflake
+  # Default table properties for Iceberg tables
+  table_properties:
+    table_format: ICEBERG
+    external_volume: YOUR_EXTERNAL_VOLUME
+    catalog: YOUR_CATALOG
 
 project: mantra_recitation
 
