@@ -20,29 +20,85 @@ This ETL pipeline connects:
 
 ### Prerequisites
 - Python 3.9+
-- Access to Snowflake instance
+- Snowflake account with Iceberg support
+- Snowflake external volume configured for Iceberg
 - Connection to Flask backend API
 
-### Installation
+### Quick Start
 
+1. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
+
+2. Configure environment:
+```bash
+cp .env.example .env
+# Edit .env with your credentials
+```
+
+3. See [SETUP.md](SETUP.md) for detailed Iceberg integration setup instructions
 
 ## Project Structure
 
 ```
 mantra-recitation-etl/
-├── dagster/          # Dagster project files
-├── sqlmesh/          # SQLMesh models and configurations
-├── config/           # Configuration files
-└── tests/            # Test files
+├── dagster/                    # Dagster orchestration
+│   ├── __init__.py            # Definitions, jobs, schedules
+│   ├── assets.py              # Data assets with Iceberg integration
+│   └── resources.py           # Flask API and Iceberg resources
+├── sqlmesh/                   # SQLMesh transformations
+│   ├── config.yaml            # SQLMesh + Iceberg configuration
+│   └── models/                # SQL models
+│       ├── staging/           # Staging layer models
+│       └── marts/             # Marts layer models
+├── config/                    # Configuration files
+│   └── dagster.yaml          # Dagster instance config
+├── tests/                     # Test files
+├── .env.example              # Environment variables template
+├── requirements.txt          # Python dependencies (with Iceberg support)
+├── SETUP.md                  # Detailed setup guide
+└── README.md                 # This file
 ```
 
 ## Development
 
-(To be added as development progresses)
+### Running Dagster Locally
+
+```bash
+# Start Dagster development server
+dagster dev
+
+# Access UI at http://localhost:3000
+```
+
+### Running SQLMesh
+
+```bash
+# Plan SQLMesh changes
+cd sqlmesh && sqlmesh plan
+
+# Apply and run transformations
+sqlmesh run
+```
+
+### Key Features
+
+- **Iceberg Tables**: All data stored in Apache Iceberg format for ACID transactions, time travel, and schema evolution
+- **Dagster Assets**: Asset-based orchestration with full lineage tracking
+- **SQLMesh Models**: Incremental and full-refresh models with data quality audits
+- **Dual Integration**: Both Dagster and SQLMesh read/write to the same Iceberg tables
+
+### Data Flow
+
+1. **Ingestion** (Dagster): Extract from Flask API → Write to Iceberg raw layer
+2. **Transformation** (SQLMesh): Read from raw → Transform → Write to staging/marts
+3. **Validation** (Dagster): Read from staging → Validate data quality
 
 ## Deployment
 
-(To be added)
+See [SETUP.md](SETUP.md) for production deployment considerations including:
+- Snowflake Iceberg configuration
+- External volume setup
+- Security and access controls
+- Scheduling and monitoring
