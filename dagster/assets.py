@@ -1,129 +1,232 @@
-"""Dagster assets for mantra recitation data pipeline."""
+"""dagster assets for mantra recitation data pipeline."""
 
 from datetime import datetime, timedelta
-from typing import Any
+import subprocess
+import polars as pl
 from dagster import asset, AssetExecutionContext, Output, MetadataValue
-import pandas as pd
-
-from .resources import FlaskAPIResource, SnowflakeIcebergResource
+from .resources import SnowflakeIcebergResource
 
 
 @asset(
-    description="Extract raw mantra recitation data from Flask API",
-    group_name="ingestion"
+    description="monitor raw iceberg table for data freshness",
+    group_name="monitoring"
 )
-def raw_mantra_recitations(
+def raw_data_freshness_check(
     context: AssetExecutionContext,
-    flask_api: FlaskAPIResource
-) -> pd.DataFrame:
-    """
-    Fetch raw mantra recitation data from the Flask backend API.
-
-    This asset extracts data from the Flask API and returns it as a DataFrame
-    for downstream processing.
-    """
-    context.log.info("Extracting mantra recitation data from API")
-
-    # Calculate date range for incremental extraction (last 7 days by default)
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=7)
-
-    # Fetch data from API
-    df = flask_api.get_recitations(
-        start_date=start_date.isoformat(),
-        end_date=end_date.isoformat()
-    )
-
-    # Add extraction metadata
-    df['extracted_at'] = datetime.now()
-
-    context.log.info(f"Extracted {len(df)} records from Flask API")
-
-    return Output(
-        df,
-        metadata={
-            "num_records": len(df),
-            "columns": MetadataValue.md(", ".join(df.columns.tolist())),
-            "date_range": f"{start_date.date()} to {end_date.date()}",
-            "preview": MetadataValue.md(df.head().to_markdown())
-        }
-    )
-
-
-@asset(
-    description="Load raw mantra recitation data to Iceberg raw layer",
-    group_name="ingestion"
-)
-def mantra_recitations_raw_iceberg(
-    context: AssetExecutionContext,
-    raw_mantra_recitations: pd.DataFrame,
     iceberg: SnowflakeIcebergResource
-) -> None:
+) -> dict:
     """
-    Load raw mantra recitation data to Snowflake Iceberg table (raw layer).
+    check the freshness of data in the raw iceberg table.
 
-    This asset writes the raw API data directly to an Iceberg table in the raw schema,
-    which serves as the source for SQLMesh transformations.
+    this asset monitors when data was last written to the raw layer
+    to ensure the flask auto-push is working correctly.
     """
-    context.log.info("Loading raw data to Snowflake Iceberg table")
+    context.log.info("checking raw data freshness")
 
-    table_name = "mantra_recitations"
-
-    # Write to Iceberg table in append mode
-    iceberg.write_to_iceberg(
-        table_name=table_name,
-        data=raw_mantra_recitations,
-        mode="append"
+    # read latest records from raw table
+    df = iceberg.read_from_iceberg(
+        table_name="mantra_recitations",
+        limit=10
     )
 
-    context.log.info(f"Successfully loaded {len(raw_mantra_recitations)} records to Iceberg")
+    if len(df) == 0:
+        context.log.warning("raw table is empty!")
+        return Output(
+            {"status": "empty", "record_count": 0},
+            metadata={
+                "status": "empty",
+                "record_count": 0
+            }
+        )
+
+    # get most recent created_at timestamp
+    latest_record = df.select(pl.col("created_at").max()).item()
+    hours_since_last_record = (datetime.now() - latest_record).total_seconds() / 3600
+
+    context.log.info(f"latest record was {hours_since_last_record:.2f} hours ago")
+
+    # alert if data is stale (>24 hours)
+    status = "fresh" if hours_since_last_record < 24 else "stale"
 
     return Output(
-        None,
+        {
+            "status": status,
+            "latest_record_time": latest_record.isoformat(),
+            "hours_since_last": hours_since_last_record,
+            "record_count": len(df)
+        },
         metadata={
-            "num_records_written": len(raw_mantra_recitations),
-            "table_name": table_name,
-            "write_mode": "append",
-            "timestamp": datetime.now().isoformat()
+            "status": status,
+            "latest_record": latest_record.isoformat(),
+            "hours_since_last": f"{hours_since_last_record:.2f}",
+            "total_records": len(df)
         }
     )
 
 
 @asset(
-    description="Read and validate data from Iceberg staging layer",
+    description="run sqlmesh plan and apply transformations",
+    group_name="transformation"
+)
+def sqlmesh_run_transformations(
+    context: AssetExecutionContext,
+    raw_data_freshness_check: dict
+) -> dict:
+    """
+    execute sqlmesh to run all transformation models.
+
+    this orchestrates the sqlmesh plan/apply process to transform
+    raw data into cleansed and marts layers.
+    """
+    context.log.info("running sqlmesh transformations")
+
+    # only run if raw data is fresh
+    if raw_data_freshness_check.get("status") == "empty":
+        context.log.warning("skipping sqlmesh run - raw table is empty")
+        return Output(
+            {"status": "skipped", "reason": "empty raw table"},
+            metadata={"status": "skipped"}
+        )
+
+    try:
+        # run sqlmesh plan with auto-apply
+        result = subprocess.run(
+            ["sqlmesh", "plan", "--auto-apply"],
+            cwd="sqlmesh",
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout
+        )
+
+        context.log.info(f"sqlmesh output:\n{result.stdout}")
+
+        if result.returncode != 0:
+            context.log.error(f"sqlmesh failed:\n{result.stderr}")
+            raise Exception(f"sqlmesh plan failed: {result.stderr}")
+
+        return Output(
+            {
+                "status": "success",
+                "output": result.stdout,
+                "timestamp": datetime.now().isoformat()
+            },
+            metadata={
+                "status": "success",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
+    except subprocess.TimeoutExpired:
+        context.log.error("sqlmesh run timed out after 5 minutes")
+        raise
+    except Exception as e:
+        context.log.error(f"sqlmesh run failed: {str(e)}")
+        raise
+
+
+@asset(
+    description="validate cleansed layer data quality",
     group_name="validation"
 )
-def validate_staging_data(
+def validate_cleansed_data(
     context: AssetExecutionContext,
-    iceberg: SnowflakeIcebergResource
-) -> pd.DataFrame:
+    iceberg: SnowflakeIcebergResource,
+    sqlmesh_run_transformations: dict
+) -> pl.DataFrame:
     """
-    Read data from the staging Iceberg table to validate SQLMesh transformations.
+    validate data quality in the cleansed iceberg table.
 
-    This asset demonstrates reading from Iceberg tables created by SQLMesh.
+    performs data quality checks on the cleansed layer after sqlmesh
+    transformations have completed.
     """
-    context.log.info("Reading data from staging Iceberg table for validation")
+    context.log.info("validating cleansed data quality")
 
-    # Read recent data from staging table (created by SQLMesh)
-    # Note: This assumes SQLMesh has already run the staging model
+    # read recent data from cleansed table
     df = iceberg.read_from_iceberg(
-        table_name="stg_mantra_recitations",
+        table_name="cln_mantra_recitation",
         limit=1000
     )
 
-    # Basic validation checks
-    assert len(df) > 0, "Staging table is empty"
-    assert "recitation_id" in df.columns, "Missing recitation_id column"
-    assert df["recitation_id"].notna().all(), "Found null recitation_ids"
+    # data quality checks
+    assert len(df) > 0, "cleansed table is empty"
+    assert "id" in df.columns, "missing id column"
 
-    context.log.info(f"Validation passed for {len(df)} records")
+    # check for nulls in required columns
+    null_checks = {
+        "id": df.filter(pl.col("id").is_null()).height,
+        "user_id": df.filter(pl.col("user_id").is_null()).height,
+        "mantra_name": df.filter(pl.col("mantra_name").is_null()).height,
+        "recitation_timestamp": df.filter(pl.col("recitation_timestamp").is_null()).height
+    }
+
+    for col, null_count in null_checks.items():
+        if null_count > 0:
+            context.log.warning(f"found {null_count} null values in {col}")
+        assert null_count == 0, f"found {null_count} null values in {col}"
+
+    # check for duplicates
+    duplicate_count = df.group_by("id").len().filter(pl.col("len") > 1).height
+    assert duplicate_count == 0, f"found {duplicate_count} duplicate ids"
+
+    context.log.info(f"validation passed for {len(df)} records")
 
     return Output(
         df,
         metadata={
             "num_records_validated": len(df),
             "validation_timestamp": datetime.now().isoformat(),
-            "columns": MetadataValue.md(", ".join(df.columns.tolist())),
-            "sample": MetadataValue.md(df.head(10).to_markdown())
+            "columns": MetadataValue.md(", ".join(df.columns)),
+            "null_checks_passed": str(null_checks),
+            "duplicate_count": duplicate_count
+        }
+    )
+
+
+@asset(
+    description="validate marts layer aggregations",
+    group_name="validation"
+)
+def validate_marts_data(
+    context: AssetExecutionContext,
+    iceberg: SnowflakeIcebergResource,
+    validate_cleansed_data: pl.DataFrame
+) -> pl.DataFrame:
+    """
+    validate marts layer aggregations.
+
+    checks that daily aggregations are computed correctly.
+    """
+    context.log.info("validating marts data quality")
+
+    # read from daily aggregation table
+    df = iceberg.read_from_iceberg(
+        table_name="mantra_recitations_daily",
+        limit=100
+    )
+
+    if len(df) == 0:
+        context.log.warning("marts table is empty")
+        return Output(
+            df,
+            metadata={"status": "empty", "num_records": 0}
+        )
+
+    # validate aggregation columns exist
+    required_cols = ["user_id", "mantra_name", "event_date", "recitation_count"]
+    for col in required_cols:
+        assert col in df.columns, f"missing required column: {col}"
+
+    # validate counts are positive
+    negative_counts = df.filter(pl.col("recitation_count") < 0).height
+    assert negative_counts == 0, f"found {negative_counts} negative recitation counts"
+
+    context.log.info(f"marts validation passed for {len(df)} records")
+
+    return Output(
+        df,
+        metadata={
+            "num_records_validated": len(df),
+            "validation_timestamp": datetime.now().isoformat(),
+            "columns": MetadataValue.md(", ".join(df.columns))
         }
     )

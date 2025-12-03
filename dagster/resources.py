@@ -53,7 +53,7 @@ class SnowflakeIcebergResource(ConfigurableResource):
     def write_to_iceberg(
         self,
         table_name: str,
-        data: pd.DataFrame,
+        data: pl.DataFrame,
         mode: str = "append"
     ) -> None:
         """
@@ -61,7 +61,7 @@ class SnowflakeIcebergResource(ConfigurableResource):
 
         Args:
             table_name: Table name (without database/schema prefix)
-            data: DataFrame to write
+            data: Polars DataFrame to write
             mode: Write mode - 'append' or 'overwrite'
         """
         logger = get_dagster_logger()
@@ -70,19 +70,19 @@ class SnowflakeIcebergResource(ConfigurableResource):
             # Get table reference
             table = self.get_table(table_name)
 
-            # Convert DataFrame to PyArrow table
-            arrow_table = pa.Table.from_pandas(data)
+            # Convert Polars DataFrame to PyArrow table
+            arrow_table = data.to_arrow()
 
             # Write to Iceberg
             if mode == "overwrite":
                 table.overwrite(arrow_table)
-                logger.info(f"Overwrote {len(data)} records to {table_name}")
+                logger.info(f"overwrote {len(data)} records to {table_name}")
             else:  # append
                 table.append(arrow_table)
-                logger.info(f"Appended {len(data)} records to {table_name}")
+                logger.info(f"appended {len(data)} records to {table_name}")
 
         except Exception as e:
-            logger.error(f"Failed to write to Iceberg table {table_name}: {str(e)}")
+            logger.error(f"failed to write to iceberg table {table_name}: {str(e)}")
             raise
 
     def read_from_iceberg(
@@ -90,7 +90,7 @@ class SnowflakeIcebergResource(ConfigurableResource):
         table_name: str,
         filters: Optional[Any] = None,
         limit: Optional[int] = None
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         """
         Read data from an Iceberg table.
 
@@ -100,7 +100,7 @@ class SnowflakeIcebergResource(ConfigurableResource):
             limit: Maximum number of rows to return
 
         Returns:
-            DataFrame containing table data
+            Polars DataFrame containing table data
         """
         logger = get_dagster_logger()
 
@@ -115,11 +115,11 @@ class SnowflakeIcebergResource(ConfigurableResource):
                 scan = scan.limit(limit)
 
             arrow_table = scan.to_arrow()
-            df = arrow_table.to_pandas()
+            df = pl.from_arrow(arrow_table)
 
-            logger.info(f"Read {len(df)} records from {table_name}")
+            logger.info(f"read {len(df)} records from {table_name}")
             return df
 
         except Exception as e:
-            logger.error(f"Failed to read from Iceberg table {table_name}: {str(e)}")
+            logger.error(f"failed to read from iceberg table {table_name}: {str(e)}")
             raise

@@ -1,4 +1,4 @@
-"""Dagster pipelines for mantra recitation ETL."""
+"""dagster pipelines for mantra recitation etl."""
 
 import os
 from dagster import (
@@ -10,39 +10,40 @@ from dagster import (
 )
 
 from . import assets
-from .resources import FlaskAPIResource, SnowflakeIcebergResource
+from .resources import SnowflakeIcebergResource
 
-# Load all assets from the assets module
+# load all assets from the assets module
 all_assets = load_assets_from_modules([assets])
 
-# Define jobs
-ingest_raw_data_job = define_asset_job(
-    name="ingest_raw_data",
-    selection=["raw_mantra_recitations", "mantra_recitations_raw_iceberg"],
-    description="Extract data from Flask API and load to Iceberg raw layer"
+# define jobs
+run_transformations_job = define_asset_job(
+    name="run_transformations",
+    selection=["raw_data_freshness_check", "sqlmesh_run_transformations"],
+    description="check raw data freshness and run sqlmesh transformations"
 )
 
-validate_data_job = define_asset_job(
-    name="validate_data",
-    selection=["validate_staging_data"],
-    description="Validate data in Iceberg staging layer after SQLMesh transformations"
+validate_all_job = define_asset_job(
+    name="validate_all",
+    selection=["validate_cleansed_data", "validate_marts_data"],
+    description="validate data quality in cleansed and marts layers"
 )
 
-# Define schedules
-daily_ingestion_schedule = ScheduleDefinition(
-    name="daily_ingestion",
-    job=ingest_raw_data_job,
-    cron_schedule="0 2 * * *",  # Run at 2 AM daily
-    description="Daily data ingestion from Flask API to Iceberg"
+full_pipeline_job = define_asset_job(
+    name="full_pipeline",
+    selection="*",  # run all assets in order
+    description="run full pipeline: freshness check -> transformations -> validation"
 )
 
-# Define resources with environment variables
+# define schedules
+daily_transformations_schedule = ScheduleDefinition(
+    name="daily_transformations",
+    job=full_pipeline_job,
+    cron_schedule="0 3 * * *",  # run at 3 am daily
+    description="daily sqlmesh transformations and validation"
+)
+
+# define resources with environment variables
 resources = {
-    "flask_api": FlaskAPIResource(
-        api_url=EnvVar("FLASK_API_URL"),
-        api_key=EnvVar("FLASK_API_KEY"),
-        timeout=int(os.getenv("FLASK_API_TIMEOUT", "30"))
-    ),
     "iceberg": SnowflakeIcebergResource(
         account=EnvVar("SNOWFLAKE_ACCOUNT"),
         user=EnvVar("SNOWFLAKE_USER"),
@@ -50,15 +51,15 @@ resources = {
         warehouse=EnvVar("SNOWFLAKE_WAREHOUSE"),
         database=EnvVar("SNOWFLAKE_DATABASE"),
         schema=EnvVar("SNOWFLAKE_SCHEMA"),
-        role=os.getenv("SNOWFLAKE_ROLE"),  # Optional
+        role=os.getenv("SNOWFLAKE_ROLE"),  # optional
         catalog_name=os.getenv("ICEBERG_CATALOG_NAME", "snowflake")
     )
 }
 
-# Main definitions object
+# main definitions object
 defs = Definitions(
     assets=all_assets,
-    jobs=[ingest_raw_data_job, validate_data_job],
-    schedules=[daily_ingestion_schedule],
+    jobs=[run_transformations_job, validate_all_job, full_pipeline_job],
+    schedules=[daily_transformations_schedule],
     resources=resources,
 )
