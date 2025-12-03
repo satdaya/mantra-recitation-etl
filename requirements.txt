@@ -13,8 +13,9 @@ snowflake-connector-python>=3.4.0
 snowflake-sqlalchemy>=1.5.0
 
 # Data Processing
-pandas>=2.0.0
+polars>=0.20.0
 pyarrow>=14.0.0
+pandas>=2.0.0  # Keep for Dagster compatibility if needed
 
 # Apache Iceberg
 pyiceberg>=0.6.0

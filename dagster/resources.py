@@ -1,59 +1,12 @@
 """Dagster resources for connecting to external systems."""
 
-from typing import Any, Dict, Optional
-import requests
-import pandas as pd
+from typing import Any, Optional
+import polars as pl
 from dagster import ConfigurableResource, get_dagster_logger
 from pydantic import Field
 from pyiceberg.catalog import load_catalog
 from pyiceberg.table import Table
 import pyarrow as pa
-
-
-class FlaskAPIResource(ConfigurableResource):
-    """Resource for connecting to Flask backend API."""
-
-    api_url: str = Field(description="Base URL for Flask API")
-    api_key: str = Field(description="API key for authentication")
-    timeout: int = Field(default=30, description="Request timeout in seconds")
-
-    def get_recitations(self, endpoint: str = "/api/recitations", **params) -> pd.DataFrame:
-        """
-        Fetch recitation data from API.
-
-        Args:
-            endpoint: API endpoint path
-            **params: Query parameters to pass to the API
-
-        Returns:
-            DataFrame containing recitation data
-        """
-        logger = get_dagster_logger()
-        url = f"{self.api_url}{endpoint}"
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-
-        try:
-            response = requests.get(
-                url,
-                headers=headers,
-                params=params,
-                timeout=self.timeout
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            # Convert to DataFrame
-            df = pd.DataFrame(data)
-            logger.info(f"Fetched {len(df)} records from {url}")
-            return df
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to fetch data from API: {str(e)}")
-            raise
 
 
 class SnowflakeIcebergResource(ConfigurableResource):
